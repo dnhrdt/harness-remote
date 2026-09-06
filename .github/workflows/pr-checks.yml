@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  migrate-live-readiness:
-    name: Migrate browser smoke readiness
+  restore-pr-checks:
+    name: Restore full PR checks
     if: github.head_ref == 'fix/browser-smoke-live-readiness'
     runs-on: ubuntu-latest
     steps:
@@ -25,39 +25,59 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Replace obsolete network-idle readiness
+      - name: Restore canonical workflow and re-enable migrated smokes
         shell: bash
         run: |
+          git fetch origin main
           python - <<'PY'
           from pathlib import Path
+          import subprocess
 
-          paths = [
-              Path('web/scripts/native-session-browser-smoke.mjs'),
-              Path('web/scripts/native-opencode-browser-smoke.mjs'),
-              Path('web/scripts/native-opencode-real-regression-smoke.mjs'),
-              Path('web/scripts/v3-browser-smoke.mjs'),
-              Path('web/scripts/v3-browser-controls-smoke.mjs'),
-          ]
+          text = subprocess.check_output(
+              ['git', 'show', 'origin/main:.github/workflows/pr-checks.yml'],
+              text=True,
+          )
 
-          changed = 0
-          for path in paths:
-              text = path.read_text()
-              updated = text.replace('waitUntil: "networkidle"', 'waitUntil: "domcontentloaded"')
-              updated = updated.replace('waitForLoadState("networkidle")', 'waitForLoadState("domcontentloaded")')
-              if updated != text:
-                  path.write_text(updated)
-                  changed += 1
+          old_comment = '''  # Source-level assertions are useful but cannot tell us whether a control is actually clipped or
+  # whether real browser state produces duplicate turns. Keep the browser gate on smoke tests whose
+  # readiness contract is compatible with the live event streams introduced in #363. Three older
+  # deep PI/OpenCode scripts still wait for Playwright `networkidle`, which can never be authoritative
+  # while their fake daemon deliberately keeps /global/event open; they remain in the repository for
+  # conversion to explicit UI readiness rather than producing deterministic false-negative checks.
+'''
+          new_comment = '''  # Source-level assertions are useful but cannot tell us whether a control is actually clipped or
+  # whether real browser state produces duplicate turns. The browser gate therefore drives the
+  # production build and waits on explicit product/UI state; persistent live event streams are not
+  # treated as page-readiness signals.
+'''
+          if old_comment not in text:
+              raise SystemExit('canonical browser-smoke comment block not found')
+          text = text.replace(old_comment, new_comment)
 
-          if changed == 0:
-              raise SystemExit('no browser smoke files needed migration')
-          print(f'migrated {changed} browser smoke files')
+          old_run = '''      - name: Run live-stream-compatible native Session smoke
+        run: |
+          node scripts/native-session-navigation-smoke.mjs
+          node scripts/native-session-model-switch-smoke.mjs
+'''
+          new_run = '''      - name: Run native Session transcript and composer smoke
+        run: |
+          node scripts/native-session-navigation-smoke.mjs
+          node scripts/native-session-browser-smoke.mjs
+          node scripts/native-opencode-browser-smoke.mjs
+          node scripts/native-opencode-real-regression-smoke.mjs
+          node scripts/native-session-model-switch-smoke.mjs
+'''
+          if old_run not in text:
+              raise SystemExit('canonical reduced smoke block not found')
+          text = text.replace(old_run, new_run)
+          Path('.github/workflows/pr-checks.yml').write_text(text)
           PY
 
-      - name: Commit migrated tests
+      - name: Commit restored workflow
         shell: bash
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add web/scripts
-          git commit -m "test(web): use explicit readiness for live-stream smokes"
+          git add .github/workflows/pr-checks.yml
+          git commit -m "ci: restore deep browser smoke gate"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
