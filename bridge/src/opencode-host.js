@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { withoutGatewayCredentials } from "./child-environment.js"
 import { assertLegacyOpenCode } from "./opencode-discovery.js"
@@ -154,6 +155,16 @@ function forwardStderrLines(child, emitLine) {
     buffer = ""
     if (line) emitLine(line)
   })
+}
+
+/**
+ * Credentials for an OpenCode server that only the daemon talks to. OpenCode hands its server
+ * password to every tool command it runs (OPENCODE_SERVER_PASSWORD), so it must never be the
+ * gateway's own password: an agent turn could otherwise authenticate against the gateway as a
+ * paired client. Every daemon request to OpenCode reads them back from the host object.
+ */
+export function internalServerCredentials() {
+  return { username: "harness-remote", password: randomBytes(32).toString("base64url") }
 }
 
 export class ManagedOpenCodeHost extends EventEmitter {

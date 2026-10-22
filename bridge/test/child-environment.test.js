@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { AcpClient } from "../src/acp-client.js"
 import { withoutGatewayCredentials } from "../src/child-environment.js"
-import { ManagedOpenCodeHost } from "../src/opencode-host.js"
+import { internalServerCredentials, ManagedOpenCodeHost } from "../src/opencode-host.js"
 
 const gatewayEnvironment = {
   PATH: "/usr/bin",
@@ -60,4 +60,13 @@ test("managed OpenCode keeps its own server credentials but not the gateway vari
   assert.equal(captured.options.env.OPENCODE_SERVER_PASSWORD, "gateway-secret")
   assert.equal(captured.options.env.HARNESS_REMOTE_PASSWORD, undefined)
   assert.equal(captured.options.env.OMP_BRIDGE_USERNAME, undefined)
+})
+
+test("managed OpenCode run by the daemon gets server credentials of its own, never the gateway's", () => {
+  const first = internalServerCredentials()
+  const second = internalServerCredentials()
+  assert.equal(typeof first.username, "string")
+  assert.ok(first.password.length >= 40, "the internal password is long and random")
+  assert.notEqual(first.password, second.password, "every daemon start gets a fresh password")
+  assert.notEqual(first.password, gatewayEnvironment.HARNESS_REMOTE_PASSWORD)
 })
